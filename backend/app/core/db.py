@@ -1,4 +1,6 @@
 import logging
+import os
+import tempfile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
@@ -22,8 +24,8 @@ try:
     with engine.connect() as conn:
         pass
 except Exception as e:
-    logger.warning(f"Primary database connection failed: {e}. Utilizing resilient local SQLite database fallback.")
-    sqlite_url = "sqlite:///./seoops.db"
+    fallback_db_path = os.path.join(tempfile.gettempdir(), "seoops.db")
+    sqlite_url = f"sqlite:///{fallback_db_path}"
     engine = create_engine(
         sqlite_url,
         connect_args={"check_same_thread": False},

@@ -6,12 +6,15 @@ from app.core.db import engine, Base
 # Import all models to register with Base
 import app.models
 
-from app.api import auth, website, scan, pages, issues, ai, lead, suite, portal, reports, gsc, settings as settings_api
+from app.api import auth, website, scan, pages, issues, ai, lead, suite, portal, reports, gsc, billing, settings as settings_api
 
 from sqlalchemy import inspect, text
 
 # Create database tables automatically on startup if they don't exist
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception:
+    pass
 
 def sync_db_columns():
     try:
@@ -21,7 +24,11 @@ def sync_db_columns():
                 job_cols = [c["name"] for c in inspector.get_columns("crawl_jobs")]
                 if "avg_score" not in job_cols:
                     conn.execute(text("ALTER TABLE crawl_jobs ADD COLUMN avg_score INTEGER NULL"))
-                conn.commit()
+            if "users" in inspector.get_table_names():
+                user_cols = [c["name"] for c in inspector.get_columns("users")]
+                if "logo" not in user_cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN logo TEXT NULL"))
+            conn.commit()
     except Exception:
         pass
 
@@ -54,6 +61,7 @@ app.include_router(suite.router, prefix=settings.API_V1_STR)
 app.include_router(portal.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
 app.include_router(gsc.router, prefix=settings.API_V1_STR)
+app.include_router(billing.router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 
 
