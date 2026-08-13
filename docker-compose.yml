@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: seoops_mysql
+    environment:
+      MYSQL_DATABASE: seoops_db
+      MYSQL_USER: seoops_user
+      MYSQL_PASSWORD: seoops_password
+      MYSQL_ROOT_PASSWORD: seoops_root_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "seoops_user", "-pseoops_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # phpMyAdmin Web UI for MySQL
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: seoops_phpmyadmin
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: seoops_user
+      PMA_PASSWORD: seoops_password
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+
+  # Redis Task Queue & Broker
+  redis:
+    image: redis:7-alpine
+    container_name: seoops_redis
+    ports:
+      - "6379:6379"
+
+  # FastAPI Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: seoops_backend
+    volumes:
+      - ./backend:/app
+      - /app/myenv
+    environment:
+      DATABASE_URL: mysql+pymysql://seoops_user:seoops_password@mysql:3306/seoops_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: seoops_super_secret_jwt_key_2026_change_me
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker Pool
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: seoops_celery_worker
+    volumes:
+      - ./backend:/app
+      - /app/myenv
+    environment:
+      DATABASE_URL: mysql+pymysql://seoops_user:seoops_password@mysql:3306/seoops_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: seoops_super_secret_jwt_key_2026_change_me
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: celery -A app.worker.celery worker --loglevel=info
+
+  # Celery Beat Scheduler (daily automated scans for reporting trends)
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: seoops_celery_beat
+    volumes:
+      - ./backend:/app
+      - /app/myenv
+    environment:
+      DATABASE_URL: mysql+pymysql://seoops_user:seoops_password@mysql:3306/seoops_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: seoops_super_secret_jwt_key_2026_change_me
+      AI_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: celery -A app.worker.celery beat --loglevel=info
+
+  # Next.js Frontend UI
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: seoops_frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:

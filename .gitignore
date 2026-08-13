@@ -1,0 +1,33 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+!backend/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+backend/myenv/
+backend/venv/
+backend/seoops.db
+backend/*.db
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+frontend/*.tsbuildinfo
+npm-debug.log*
+
+# Local tooling / editor
+.freebuff/
+.vscode/
+.idea/
+.DS_Store
+*.log
+
+# Temporary / verification scripts
+backend/verify_*.py
