@@ -1,7 +1,7 @@
 [project]
-name = "seoops-backend"
+name = "seoops-monorepo"
 version = "1.0.0"
-description = "SEOOps FastAPI Backend"
+description = "SEOOps Monorepo"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110.0",
@@ -27,6 +27,3 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "stripe>=10.0.0",
 ]
-
-[tool.vercel]
-entrypoint = "app.main:app"
