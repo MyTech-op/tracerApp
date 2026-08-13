@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.core.config import settings
 from app.core.db import engine, Base
@@ -37,6 +38,8 @@ sync_db_columns()
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
+    docs_url=f"{settings.API_V1_STR}/docs",
+    redoc_url=f"{settings.API_V1_STR}/redoc",
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
@@ -71,8 +74,18 @@ def root():
         "name": settings.PROJECT_NAME,
         "version": settings.VERSION,
         "status": "running",
-        "docs": "/docs"
+        "docs": f"{settings.API_V1_STR}/docs"
     }
+
+
+@app.get("/docs", include_in_schema=False)
+def redirect_docs():
+    return RedirectResponse(url=f"{settings.API_V1_STR}/docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+def redirect_redoc():
+    return RedirectResponse(url=f"{settings.API_V1_STR}/redoc")
 
 
 @app.get("/health")
