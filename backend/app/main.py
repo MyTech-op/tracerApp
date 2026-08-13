@@ -88,6 +88,11 @@ def redirect_redoc():
     return RedirectResponse(url=f"{settings.API_V1_STR}/redoc")
 
 
+@app.get("/api/index", include_in_schema=False)
+def redirect_api_index():
+    return RedirectResponse(url=f"{settings.API_V1_STR}/docs")
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
