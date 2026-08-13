@@ -29,6 +29,3 @@ dependencies = [
     "fpdf2>=2.8.0",
     "pypdf>=4.0.0",
 ]
-
-[tool.vercel]
-entrypoint = "api/index.py"
