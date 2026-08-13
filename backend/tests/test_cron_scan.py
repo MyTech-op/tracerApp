@@ -18,12 +18,19 @@ client = TestClient(app)
 
 def _seed_website(status: str = "active") -> int:
     db = SessionLocal()
-    user = User(email="cron@test.com", password_hash="x", plan="free")
-    db.add(user)
-    db.flush()
-    website = Website(user_id=user.id, domain="cron-example.com", status=status)
-    db.add(website)
-    db.commit()
+    user = db.query(User).filter(User.email == "cron@test.com").first()
+    if user is None:
+        user = User(email="cron@test.com", password_hash="x", plan="free")
+        db.add(user)
+        db.flush()
+    website = db.query(Website).filter(
+        Website.user_id == user.id, Website.domain == "cron-example.com"
+    ).first()
+    if website is None:
+        website = Website(user_id=user.id, domain="cron-example.com", status=status)
+        db.add(website)
+        db.commit()
+        db.refresh(website)
     website_id = website.id
     db.close()
     return website_id

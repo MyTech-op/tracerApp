@@ -10,6 +10,9 @@ export default function SettingsPage() {
   const [agencyName, setAgencyName] = useState('');
   const [semrushKey, setSemrushKey] = useState('');
   const [ahrefsKey, setAhrefsKey] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState('');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -28,6 +31,44 @@ export default function SettingsPage() {
       console.error('Failed to load settings', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleLogoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogoFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setLogoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const handleLogoUpload = async () => {
+    if (!logoFile) return;
+    setUploadingLogo(true);
+    try {
+      const form = new FormData();
+      form.append('file', logoFile);
+      const res = await api.post('/settings/logo', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setSettingsStatus(res.data);
+      setLogoFile(null);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'Logo upload failed — use a PNG or JPEG under 2 MB.');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    try {
+      const res = await api.delete('/settings/logo');
+      setSettingsStatus(res.data);
+      setLogoPreview('');
+      setLogoFile(null);
+    } catch (err) {
+      alert('Failed to remove logo');
     }
   };
 
@@ -100,6 +141,44 @@ export default function SettingsPage() {
               onChange={(e) => setAgencyName(e.target.value)}
               style={{ width: '100%' }}
             />
+          </div>
+
+          <div style={{ marginTop: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <label style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Agency Logo (white-label PDF reports)</label>
+              {settingsStatus?.logo_set ? (
+                <span className="badge badge-healthy" style={{ fontSize: '11px' }}>✓ Logo uploaded</span>
+              ) : (
+                <span className="badge" style={{ fontSize: '11px', background: 'rgba(148, 163, 184, 0.2)', color: '#94a3b8' }}>Optional</span>
+              )}
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+              Appears at the top of every generated PDF report. PNG or JPEG, max 2 MB.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <label
+                style={{
+                  padding: '10px 16px', borderRadius: '10px', border: '1px dashed rgba(129, 140, 248, 0.5)',
+                  color: '#a5b4fc', fontSize: '13px', cursor: 'pointer', background: 'rgba(99, 102, 241, 0.08)',
+                }}
+              >
+                Choose file...
+                <input type="file" accept="image/png,image/jpeg" onChange={handleLogoSelect} style={{ display: 'none' }} />
+              </label>
+              {logoPreview && (
+                <img src={logoPreview} alt="Logo preview" style={{ height: '40px', maxWidth: '160px', objectFit: 'contain', background: '#fff', borderRadius: '6px', padding: '4px' }} />
+              )}
+              {logoFile && (
+                <button type="button" className="btn-primary" onClick={handleLogoUpload} disabled={uploadingLogo} style={{ padding: '8px 16px', fontSize: '13px' }}>
+                  {uploadingLogo ? 'Uploading...' : 'Upload Logo'}
+                </button>
+              )}
+              {settingsStatus?.logo_set && (
+                <button type="button" className="btn-secondary" onClick={handleLogoRemove} style={{ padding: '8px 16px', fontSize: '13px', color: '#f43f5e' }}>
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

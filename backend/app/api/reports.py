@@ -12,6 +12,7 @@ from app.models import (
     SearchConsoleProfile, GSCMetric, GSCQueryMetric,
 )
 from app.api.auth import get_current_user
+from app.services.pdf_report import build_whitelabel_pdf
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -60,6 +61,146 @@ def _site_snapshot(db: Session, website: Website) -> Dict[str, Any]:
         "leads_captured": leads_count,
         "total_scans": scans,
         "last_scan_at": website.last_scan_at,
+    }
+
+
+def build_website_report(db: Session, website: Website) -> Dict[str, Any]:
+    """
+    Full per-site report data (score trend, issue analytics, worst pages,
+    deployed fixes timeline, lead attribution, Google Search Console KPIs).
+    Shared by the JSON endpoint and the white-label PDF exporter.
+    """
+    snapshot = _site_snapshot(db, website)
+
+    # Score trend: one point per completed crawl, oldest first
+    jobs = db.query(CrawlJob).filter(
+        CrawlJob.website_id == website.id,
+        CrawlJob.status == "completed",
+        CrawlJob.avg_score.isnot(None)
+    ).order_by(CrawlJob.started_at.asc()).all()
+
+    score_history = [
+        {
+            "date": job.started_at.isoformat() + "Z",
+            "score": job.avg_score,
+            "issues": job.total_issues_found,
+            "pages": job.total_pages_scanned,
+        }
+        for job in jobs
+    ]
+
+    # Issue analytics
+    open_issues = db.query(SEOIssue).join(Page).filter(
+        Page.website_id == website.id, SEOIssue.status == "open"
+    ).all()
+    severity = _severity_counts(open_issues)
+
+    issue_type_rows = {}
+    for issue in open_issues:
+        row = issue_type_rows.setdefault(issue.issue_type, {"issue_type": issue.issue_type, "count": 0, "severity": issue.severity})
+        row["count"] += 1
+    issue_breakdown = sorted(issue_type_rows.values(), key=lambda r: r["count"], reverse=True)
+
+    # Worst-performing pages
+    pages = db.query(Page).filter(Page.website_id == website.id).order_by(Page.seo_score.asc()).limit(10).all()
+    top_pages = [
+        {
+            "id": p.id,
+            "url": p.url,
+            "title": p.title,
+            "seo_score": p.seo_score,
+            "word_count": p.word_count,
+            "missing_alt_count": p.missing_alt_count,
+            "status_code": p.status_code,
+            "last_crawled_at": p.last_crawled_at.isoformat() + "Z" if p.last_crawled_at else None,
+        }
+        for p in pages
+    ]
+
+    # Deployed fixes timeline
+    approved_fixes = db.query(AISuggestion).join(SEOIssue).join(Page).filter(
+        Page.website_id == website.id, AISuggestion.status == "approved"
+    ).order_by(AISuggestion.created_at.desc()).limit(50).all()
+
+    fixes_timeline = [
+        {
+            "id": sug.id,
+            "page_url": sug.issue.page.url if (sug.issue and sug.issue.page) else website.domain,
+            "issue_type": sug.issue.issue_type if sug.issue else "SEO Fix",
+            "applied_title": sug.suggested_title,
+            "applied_meta": sug.suggested_meta,
+            "approved_at": sug.created_at.isoformat() + "Z",
+        }
+        for sug in approved_fixes
+    ]
+
+    # Lead attribution by source
+    leads = db.query(Lead).filter(Lead.website_id == website.id).all()
+    source_counts: Dict[str, int] = {}
+    for lead in leads:
+        src = lead.source or "unknown"
+        source_counts[src] = source_counts.get(src, 0) + 1
+    leads_by_source = sorted(
+        [{"source": k, "count": v} for k, v in source_counts.items()],
+        key=lambda r: r["count"], reverse=True
+    )
+
+    changes_detected = db.query(PageChange).join(Page).filter(Page.website_id == website.id).count()
+    versions_deployed = db.query(FixVersion).filter(FixVersion.website_id == website.id).count()
+
+    # Google Search Console: real search performance
+    profile = db.query(SearchConsoleProfile).filter(
+        SearchConsoleProfile.website_id == website.id
+    ).first()
+    gsc = {
+        "connected": bool(profile and profile.site_url),
+        "site_url": profile.site_url if profile else None,
+        "last_sync_at": profile.last_sync_at.isoformat() + "Z" if (profile and profile.last_sync_at) else None,
+        "status": profile.status if profile else "disconnected",
+        "error_message": profile.error_message if profile else None,
+        "metrics": [],
+        "top_queries": [],
+    }
+    if profile:
+        gsc_metrics = db.query(GSCMetric).filter(
+            GSCMetric.website_id == website.id
+        ).order_by(GSCMetric.date.asc()).all()
+        gsc["metrics"] = [
+            {
+                "date": str(m.date),
+                "clicks": m.clicks,
+                "impressions": m.impressions,
+                "ctr": round(m.ctr, 4),
+                "position": round(m.position, 2),
+            }
+            for m in gsc_metrics
+        ]
+        top_queries = db.query(GSCQueryMetric).filter(
+            GSCQueryMetric.website_id == website.id
+        ).order_by(GSCQueryMetric.date.desc(), GSCQueryMetric.clicks.desc()).limit(10).all()
+        gsc["top_queries"] = [
+            {
+                "query": q.query,
+                "date": str(q.date),
+                "clicks": q.clicks,
+                "impressions": q.impressions,
+                "ctr": round(q.ctr, 4),
+                "position": round(q.position, 2),
+            }
+            for q in top_queries
+        ]
+
+    return {
+        **snapshot,
+        "score_history": score_history,
+        "severity_breakdown": severity,
+        "issue_breakdown": issue_breakdown,
+        "top_pages": top_pages,
+        "fixes_timeline": fixes_timeline,
+        "leads_by_source": leads_by_source,
+        "changes_detected": changes_detected,
+        "versions_deployed": versions_deployed,
+        "gsc": gsc,
     }
 
 
@@ -113,138 +254,40 @@ def get_website_report(
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
 
-    snapshot = _site_snapshot(db, website)
+    return build_website_report(db, website)
 
-    # Score trend: one point per completed crawl, oldest first
-    jobs = db.query(CrawlJob).filter(
-        CrawlJob.website_id == website_id,
-        CrawlJob.status == "completed",
-        CrawlJob.avg_score.isnot(None)
-    ).order_by(CrawlJob.started_at.asc()).all()
 
-    score_history = [
-        {
-            "date": job.started_at.isoformat() + "Z",
-            "score": job.avg_score,
-            "issues": job.total_issues_found,
-            "pages": job.total_pages_scanned,
-        }
-        for job in jobs
-    ]
+@router.get("/website/{website_id}/pdf")
+def export_website_report_pdf(
+    website_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    White-label PDF report: agency name + logo, score trend, Google Search
+    Console KPIs, fixes deployed, and issue analytics. Client-ready.
+    """
+    website = db.query(Website).filter(
+        Website.id == website_id,
+        Website.user_id == current_user.id
+    ).first()
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
 
-    # Issue analytics
-    open_issues = db.query(SEOIssue).join(Page).filter(
-        Page.website_id == website_id, SEOIssue.status == "open"
-    ).all()
-    severity = _severity_counts(open_issues)
-
-    issue_type_rows = {}
-    for issue in open_issues:
-        row = issue_type_rows.setdefault(issue.issue_type, {"issue_type": issue.issue_type, "count": 0, "severity": issue.severity})
-        row["count"] += 1
-    issue_breakdown = sorted(issue_type_rows.values(), key=lambda r: r["count"], reverse=True)
-
-    # Worst-performing pages
-    pages = db.query(Page).filter(Page.website_id == website_id).order_by(Page.seo_score.asc()).limit(10).all()
-    top_pages = [
-        {
-            "id": p.id,
-            "url": p.url,
-            "title": p.title,
-            "seo_score": p.seo_score,
-            "word_count": p.word_count,
-            "missing_alt_count": p.missing_alt_count,
-            "status_code": p.status_code,
-            "last_crawled_at": p.last_crawled_at.isoformat() + "Z" if p.last_crawled_at else None,
-        }
-        for p in pages
-    ]
-
-    # Deployed fixes timeline
-    approved_fixes = db.query(AISuggestion).join(SEOIssue).join(Page).filter(
-        Page.website_id == website_id, AISuggestion.status == "approved"
-    ).order_by(AISuggestion.created_at.desc()).limit(50).all()
-
-    fixes_timeline = [
-        {
-            "id": sug.id,
-            "page_url": sug.issue.page.url if (sug.issue and sug.issue.page) else website.domain,
-            "issue_type": sug.issue.issue_type if sug.issue else "SEO Fix",
-            "applied_title": sug.suggested_title,
-            "applied_meta": sug.suggested_meta,
-            "approved_at": sug.created_at.isoformat() + "Z",
-        }
-        for sug in approved_fixes
-    ]
-
-    # Lead attribution by source
-    leads = db.query(Lead).filter(Lead.website_id == website_id).all()
-    source_counts: Dict[str, int] = {}
-    for lead in leads:
-        src = lead.source or "unknown"
-        source_counts[src] = source_counts.get(src, 0) + 1
-    leads_by_source = sorted(
-        [{"source": k, "count": v} for k, v in source_counts.items()],
-        key=lambda r: r["count"], reverse=True
+    report = build_website_report(db, website)
+    pdf_bytes = build_whitelabel_pdf(
+        report=report,
+        agency_name=current_user.agency_name or "SEOOps",
+        logo_data_url=current_user.logo,
     )
 
-    changes_detected = db.query(PageChange).join(Page).filter(Page.website_id == website_id).count()
-    versions_deployed = db.query(FixVersion).filter(FixVersion.website_id == website_id).count()
-
-    # Google Search Console: real search performance
-    profile = db.query(SearchConsoleProfile).filter(
-        SearchConsoleProfile.website_id == website_id
-    ).first()
-    gsc = {
-        "connected": bool(profile and profile.site_url),
-        "site_url": profile.site_url if profile else None,
-        "last_sync_at": profile.last_sync_at.isoformat() + "Z" if (profile and profile.last_sync_at) else None,
-        "status": profile.status if profile else "disconnected",
-        "error_message": profile.error_message if profile else None,
-        "metrics": [],
-        "top_queries": [],
-    }
-    if profile:
-        gsc_metrics = db.query(GSCMetric).filter(
-            GSCMetric.website_id == website_id
-        ).order_by(GSCMetric.date.asc()).all()
-        gsc["metrics"] = [
-            {
-                "date": str(m.date),
-                "clicks": m.clicks,
-                "impressions": m.impressions,
-                "ctr": round(m.ctr, 4),
-                "position": round(m.position, 2),
-            }
-            for m in gsc_metrics
-        ]
-        top_queries = db.query(GSCQueryMetric).filter(
-            GSCQueryMetric.website_id == website_id
-        ).order_by(GSCQueryMetric.date.desc(), GSCQueryMetric.clicks.desc()).limit(10).all()
-        gsc["top_queries"] = [
-            {
-                "query": q.query,
-                "date": str(q.date),
-                "clicks": q.clicks,
-                "impressions": q.impressions,
-                "ctr": round(q.ctr, 4),
-                "position": round(q.position, 2),
-            }
-            for q in top_queries
-        ]
-
-    return {
-        **snapshot,
-        "score_history": score_history,
-        "severity_breakdown": severity,
-        "issue_breakdown": issue_breakdown,
-        "top_pages": top_pages,
-        "fixes_timeline": fixes_timeline,
-        "leads_by_source": leads_by_source,
-        "changes_detected": changes_detected,
-        "versions_deployed": versions_deployed,
-        "gsc": gsc,
-    }
+    safe_domain = website.domain.replace(".", "_").replace("/", "_")
+    filename = f"seoops_report_{safe_domain}_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/website/{website_id}/export")

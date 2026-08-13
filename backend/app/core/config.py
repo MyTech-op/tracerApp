@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     GSC_REDIRECT_URI: str = "http://localhost:8000/api/v1/gsc/callback"
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Stripe billing (set STRIPE_SECRET_KEY to activate checkout/portal/webhook).
+    # Price IDs are optional — when blank, prices are auto-created on first checkout.
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_STARTER: str = ""
+    STRIPE_PRICE_GROWTH: str = ""
+    STRIPE_PRICE_AGENCY: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

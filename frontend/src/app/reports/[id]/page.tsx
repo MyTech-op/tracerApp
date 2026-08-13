@@ -139,7 +139,7 @@ function TrendAreaChart({ data, label, color }: { data: { date: string; value: n
   const y = (v: number) => PAD.top + ((max - v) / range) * (H - PAD.top - PAD.bottom);
   const line = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(d.value).toFixed(1)}`).join(' ');
   const area = `${line} L${x(data.length - 1).toFixed(1)},${(H - PAD.bottom).toFixed(1)} L${x(0).toFixed(1)},${(H - PAD.bottom).toFixed(1)} Z`;
-  const ticks = [...new Set([0, Math.round(max / 2), Math.round(max)])];
+  const ticks = Array.from(new Set([0, Math.round(max / 2), Math.round(max)]));
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
@@ -195,6 +195,7 @@ export default function WebsiteReportPage({ params }: { params: { id: string } |
   const [report, setReport] = useState<WebsiteReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [pdfExporting, setPdfExporting] = useState(false);
   const [syncingGsc, setSyncingGsc] = useState(false);
   const [gscError, setGscError] = useState('');
   const [gscNotice, setGscNotice] = useState('');
@@ -284,6 +285,26 @@ export default function WebsiteReportPage({ params }: { params: { id: string } |
     }
   };
 
+  const handleExportPdf = async () => {
+    if (!report) return;
+    setPdfExporting(true);
+    try {
+      const res = await api.get(`/reports/website/${report.id}/pdf`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `seoops_report_${report.domain.replace(/\./g, '_')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('PDF export failed');
+    } finally {
+      setPdfExporting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-main)', color: '#fff' }}>
@@ -321,8 +342,12 @@ export default function WebsiteReportPage({ params }: { params: { id: string } |
             {exporting ? <RefreshCw size={15} className="spin" /> : <FileDown size={15} />}
             {exporting ? 'Exporting...' : 'Export CSV'}
           </button>
+          <button className="btn-primary" onClick={handleExportPdf} disabled={pdfExporting}>
+            {pdfExporting ? <RefreshCw size={15} className="spin" /> : <FileSpreadsheet size={15} />}
+            {pdfExporting ? 'Generating...' : 'Download PDF'}
+          </button>
           <button className="btn-secondary" onClick={() => window.print()}>
-            <Printer size={15} /> Print / PDF
+            <Printer size={15} /> Print View
           </button>
           <button className="btn-secondary" onClick={() => router.push(`/website/${report.id}`)}>
             <Activity size={15} /> Live Workspace

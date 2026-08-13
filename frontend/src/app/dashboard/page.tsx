@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, Website } from '@/lib/api';
-import { Globe, Plus, Play, Trash2, ArrowRight, ShieldCheck, Activity, LogOut, Settings, BarChart3 } from 'lucide-react';
+import { Globe, Plus, Play, Trash2, ArrowRight, ShieldCheck, Activity, LogOut, Settings, BarChart3, CreditCard } from 'lucide-react';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -85,6 +85,9 @@ export default function Dashboard() {
           </button>
           <button className="btn-secondary" onClick={() => router.push('/settings')}>
             <Settings size={16} /> Agency Settings
+          </button>
+          <button className="btn-secondary" onClick={() => router.push('/billing')}>
+            <CreditCard size={16} /> Billing
           </button>
           <button className="btn-primary" onClick={() => setShowModal(true)}>
             <Plus size={16} /> Add Website

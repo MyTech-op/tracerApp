@@ -11,8 +11,12 @@ os.environ["DATABASE_URL"] = "sqlite:///" + tempfile.mktemp(suffix=".db")
 
 import httpx  # noqa: E402
 
+from app.core.db import engine, Base, SessionLocal  # noqa: E402
+import app.models  # noqa: E402  (register models with Base)
+
+Base.metadata.create_all(bind=engine)  # ensure tables exist on the temp DB
+
 from app.core.security import sign_state, verify_state, encrypt_secret  # noqa: E402
-from app.core.db import SessionLocal  # noqa: E402
 from app.models import User, Website, SearchConsoleProfile, GSCMetric, GSCQueryMetric  # noqa: E402
 from app.services import gsc as gsc_service  # noqa: E402
 
@@ -21,21 +25,28 @@ SA_HOST = "searchconsole.googleapis.com"
 
 
 def _seed_site_with_profile() -> int:
+    """Idempotent: reuse the user + website across tests."""
     db = SessionLocal()
-    user = User(email="gsc@test.com", password_hash="x", plan="free")
-    db.add(user)
-    db.flush()
-    site = Website(user_id=user.id, domain="gsc-example.com", status="active")
-    db.add(site)
-    db.flush()
-    profile = SearchConsoleProfile(
-        website_id=site.id,
-        access_token_encrypted=encrypt_secret("old-access"),
-        refresh_token_encrypted=encrypt_secret("refresh-token"),
-        token_expires_at=datetime.utcnow() - timedelta(minutes=5),  # force a refresh
-        status="connected",
-    )
-    db.add(profile)
+    user = db.query(User).filter(User.email == "gsc@test.com").first()
+    if user is None:
+        user = User(email="gsc@test.com", password_hash="x", plan="free")
+        db.add(user)
+        db.flush()
+    site = db.query(Website).filter(Website.user_id == user.id, Website.domain == "gsc-example.com").first()
+    if site is None:
+        site = Website(user_id=user.id, domain="gsc-example.com", status="active")
+        db.add(site)
+        db.flush()
+    profile = db.query(SearchConsoleProfile).filter(SearchConsoleProfile.website_id == site.id).first()
+    if profile is None:
+        profile = SearchConsoleProfile(
+            website_id=site.id,
+            access_token_encrypted=encrypt_secret("old-access"),
+            refresh_token_encrypted=encrypt_secret("refresh-token"),
+            token_expires_at=datetime.utcnow() - timedelta(minutes=5),  # force a refresh
+            status="connected",
+        )
+        db.add(profile)
     db.commit()
     site_id = site.id
     db.close()
@@ -59,13 +70,13 @@ def _mock_transport() -> httpx.MockTransport:
                 ]
             })
         if host == SA_HOST and request.url.path.endswith("/searchAnalytics/query"):
-            body = request.read()
-            if b'"dimensions": ["date"]' in body:
+            body = request.content.decode("utf-8", errors="ignore")
+            if '"dimensions"' in body and '"date"' in body:
                 return httpx.Response(200, json={"rows": [
                     {"keys": ["2026-01-10"], "clicks": 12, "impressions": 300, "ctr": 0.04, "position": 5.2},
                     {"keys": ["2026-01-11"], "clicks": 20, "impressions": 400, "ctr": 0.05, "position": 4.1},
                 ]})
-            if b'"dimensions": ["query"]' in body:
+            if '"dimensions"' in body and '"query"' in body:
                 return httpx.Response(200, json={"rows": [
                     {"keys": ["best gsc-example services"], "clicks": 15, "impressions": 250, "ctr": 0.06, "position": 3.2},
                 ]})
@@ -132,9 +143,16 @@ def test_report_includes_gsc_block():
     db = SessionLocal()
     user = db.query(U).filter(U.email == "gsc@test.com").first()
 
+    # Simulate a connected-but-never-synced profile
+    profile = db.query(SearchConsoleProfile).filter_by(website_id=site_id).first()
+    profile.site_url = None
+    db.query(GSCMetric).filter(GSCMetric.website_id == site_id).delete(synchronize_session=False)
+    db.query(GSCQueryMetric).filter(GSCQueryMetric.website_id == site_id).delete(synchronize_session=False)
+    db.commit()
+
     report = get_website_report(site_id, user, db)
     assert "gsc" in report
-    assert report["gsc"]["connected"] is False  # no sync run, no site_url yet
+    assert report["gsc"]["connected"] is False
     assert report["gsc"]["metrics"] == []
 
     # After a sync, the block carries real data

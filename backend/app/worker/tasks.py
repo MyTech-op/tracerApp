@@ -4,7 +4,8 @@ from datetime import datetime
 from urllib.parse import urlparse
 from app.worker.celery import celery_app
 from app.core.db import SessionLocal
-from app.models import Website, Page, PageSnapshot, PageChange, SEOIssue, AISuggestion, CrawlJob
+from app.core.plans import get_plan, enforce_page_cap, last_scan_at
+from app.models import User, Website, Page, PageSnapshot, PageChange, SEOIssue, AISuggestion, CrawlJob
 from app.crawler.fetcher import PageFetcher
 from app.crawler.hasher import generate_content_hash
 from app.seo.rules import SEORulesEngine
@@ -23,6 +24,12 @@ def run_website_crawl(job_id: int, website_id: int, max_pages: int = 25):
     if not job or not website:
         db.close()
         return {"status": "error", "message": "Job or website not found"}
+
+    # Plan enforcement: never crawl more pages than the site owner's plan allows,
+    # regardless of what the caller requested.
+    owner = db.query(User).filter(User.id == website.user_id).first()
+    if owner is not None:
+        max_pages = enforce_page_cap(owner, max_pages)
 
     try:
         job.status = "crawling"
@@ -231,6 +238,8 @@ def run_scheduled_website_scans():
     Celery Beat entrypoint: kicks off a crawl for every tracked website that is
     not currently scanning. Keeps report score trends populated automatically.
     """
+    from datetime import datetime, timedelta
+
     db = SessionLocal()
     started = 0
     skipped = 0
@@ -238,16 +247,28 @@ def run_scheduled_website_scans():
         websites = db.query(Website).filter(Website.status != "scanning").all()
         for website in websites:
             try:
+                owner = db.query(User).filter(User.id == website.user_id).first()
+                if owner is None:
+                    skipped += 1
+                    continue
+                # Honor the plan's scan interval: skip sites scanned too recently.
+                plan = get_plan(owner.plan)
+                last = last_scan_at(db, website.id)
+                if last is not None and datetime.utcnow() < last + timedelta(hours=plan.scan_interval_hours):
+                    skipped += 1
+                    continue
+
                 job = CrawlJob(website_id=website.id, status="pending")
                 db.add(job)
                 db.commit()
                 db.refresh(job)
 
+                max_pages = enforce_page_cap(owner, None)
                 try:
-                    run_website_crawl.delay(job.id, website.id)
+                    run_website_crawl.delay(job.id, website.id, max_pages=max_pages)
                 except Exception:
                     # Celery broker unavailable: fall back to inline execution
-                    run_website_crawl(job.id, website.id)
+                    run_website_crawl(job.id, website.id, max_pages=max_pages)
                 started += 1
             except Exception as e:
                 logger.warning(f"Scheduled scan failed for website {website.id}: {str(e)}")

@@ -8,6 +8,7 @@ from app.models.job import CrawlJob
 from app.models.lead import Lead
 from app.models.version import FixVersion
 from app.models.gsc import SearchConsoleProfile, GSCMetric, GSCQueryMetric
+from app.models.subscription import Subscription
 
 __all__ = [
     "User",
@@ -23,4 +24,5 @@ __all__ = [
     "SearchConsoleProfile",
     "GSCMetric",
     "GSCQueryMetric",
+    "Subscription",
 ]

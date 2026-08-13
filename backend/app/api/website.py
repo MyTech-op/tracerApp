@@ -9,6 +9,7 @@ from app.schemas.website import WebsiteCreate, WebsiteResponse
 from app.api.auth import get_current_user
 
 from app.models import CrawlJob
+from app.core.plans import site_limit_check, enforce_page_cap
 from app.worker.tasks import run_website_crawl
 
 router = APIRouter(prefix="/website", tags=["Websites"])
@@ -20,6 +21,16 @@ def create_website(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    allowed, used, limit = site_limit_check(db, current_user)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=(
+                f"Plan limit reached: {used}/{limit} websites on your current plan. "
+                "Upgrade at /billing to track more sites."
+            ),
+        )
+
     clean_domain = website_in.domain.strip().lower()
     if clean_domain.startswith("https://"):
         clean_domain = clean_domain[8:]
@@ -53,11 +64,12 @@ def create_website(
     db.commit()
     db.refresh(job)
 
+    max_pages = enforce_page_cap(current_user, None)
     try:
-        run_website_crawl.delay(job.id, website.id)
+        run_website_crawl.delay(job.id, website.id, max_pages=max_pages)
     except Exception:
         # Fallback to direct synchronous execution if Celery background runner is offline
-        run_website_crawl(job.id, website.id)
+        run_website_crawl(job.id, website.id, max_pages=max_pages)
 
     db.refresh(website)
     return website

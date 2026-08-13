@@ -182,6 +182,89 @@ Cost: Vercel Pro $20/mo (needed for 300s functions) + Neon ~$19/mo — vs Option
 
 ---
 
+## Google Search Console (real search data)
+
+The app shows **real clicks, impressions, and positions** from Google when a website owner
+connects Search Console (free — no Semrush/Ahrefs cost):
+
+1. **Google Cloud setup** — create an OAuth client ID (Web application) at
+   https://console.cloud.google.com/apis/credentials with scope
+   `https://www.googleapis.com/auth/webmasters.readonly`. Add the redirect URI:
+   - Local: `http://localhost:8000/api/v1/gsc/callback`
+   - Vercel: `https://<backend-project>.vercel.app/api/v1/gsc/callback`
+2. **Env vars**: `GSC_CLIENT_ID`, `GSC_CLIENT_SECRET`, `GSC_REDIRECT_URI`, `FRONTEND_URL`.
+3. **Connect** from the report page (`/reports/[id]` → "Connect Google Search Console").
+   The user verifies the domain with Google; the app auto-picks the matching property
+   (`sc-domain:` preferred).
+4. **Data**: daily site-level metrics (clicks, impressions, CTR, avg position) for the last
+   30 days + a bounded top-25-queries snapshot. Synced on connect, via the "Sync Now"
+   button, via the daily `gsc-daily-sync` Celery Beat task, and via Vercel Cron
+   (`/api/v1/gsc/cron`, 07:30, guarded by `CRON_SECRET`).
+
+OAuth tokens are encrypted at rest with a key derived from `SECRET_KEY`.
+
+---
+
+## Stripe billing (agency plans: Starter / Growth / Agency)
+
+Paid tiers are enforced on **site count**, **pages per scan**, and **scan frequency**:
+
+| Plan | Price | Sites | Pages/scan | Scan interval |
+|---|---|---|---|---|
+| Free | $0 | 1 | 10 | 24h |
+| Starter | $49/mo | 3 | 25 | 24h |
+| Growth | $99/mo | 10 | 50 | 6h |
+| Agency | $199/mo | 25 | 100 | 2h |
+
+Setup:
+
+1. Create a Stripe account and get a secret key (https://dashboard.stripe.com/apikeys).
+2. **Env vars**: `STRIPE_SECRET_KEY`, `FRONTEND_URL` (already used by GSC), and — optionally
+   — `STRIPE_PRICE_STARTER/GROWTH/AGENCY`. If the price IDs are left blank, SEOOps
+   auto-creates the monthly prices on the first checkout (products named "SEOOps …").
+3. **Webhook**: in the Stripe dashboard add an endpoint for `checkout.session.completed`,
+   `customer.subscription.updated`, and `customer.subscription.deleted` pointing at
+   `https://<your-backend>/api/v1/billing/webhook`. Copy the signing secret into
+   `STRIPE_WEBHOOK_SECRET`. (Without a signing secret, the webhook still works in dev mode
+   but **always set it in production**.)
+4. **Frontend**: the `/billing` page (linked from the dashboard header) shows plan cards,
+   usage meters, an Upgrade button that redirects to Stripe Checkout, and a
+   "Manage Billing" button for the Stripe customer portal (cancel / downgrade).
+
+How limits are enforced:
+
+- Site cap → `POST /api/v1/website` returns **402** when the plan's site limit is hit.
+- Scan frequency → `POST /api/v1/scan` returns **429** with `next_allowed_at` when the
+  interval hasn't elapsed.
+- Page cap → every crawl path (manual, cron, Celery Beat, and the crawl task itself)
+  clamps `max_pages` to the plan's cap, so no caller can exceed it.
+- Plan changes from Stripe events are applied automatically via the webhook; when a
+  subscription is canceled the user falls back to the Free plan.
+
+`/billing/status` exposes the current plan, subscription state, and usage so the frontend
+can meter against it.
+
+---
+
+## White-label PDF reports
+
+`GET /api/v1/reports/website/{id}/pdf` (auth required) renders a client-ready PDF entirely
+server-side with **fpdf2** (pure Python — no system PDF deps, safe on Vercel/Neon):
+
+- Agency name + uploaded logo in the header, site domain, generated date
+- KPI cards (health score, delta, open issues, fixes deployed, leads)
+- SEO health score trend line chart (from crawl history)
+- Google Search Console block: clicks/impressions/CTR/position, a 30-day trend chart, and
+  top queries (shown when the site is connected)
+- Fixes deployed timeline and open-issue breakdown tables, footer with agency name and
+  page numbers on every page
+
+Set the branding under **Agency Settings** (agency name + logo upload, PNG/JPEG up to 2 MB;
+the logo is stored in the `users.logo` column as a data URL). The **Download PDF** button on
+the report page (`/reports/[id]`) fetches it with the auth token and saves the file.
+
+---
+
 ## Production checklist (every option)
 
 - [ ] `NEXT_PUBLIC_API_URL` set to the real backend URL (not localhost)

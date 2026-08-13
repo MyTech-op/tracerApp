@@ -28,6 +28,7 @@ export interface User {
 
 export interface UserSettings {
   agency_name?: string;
+  logo_set: boolean;
   semrush_api_key_set: boolean;
   ahrefs_api_key_set: boolean;
 }
@@ -213,6 +214,34 @@ export interface GSCBlock {
   error_message?: string;
   metrics: GSCMetricPoint[];
   top_queries: GSCQueryRow[];
+}
+
+export interface PlanInfo {
+  id: string;
+  name: string;
+  price_monthly_usd: number;
+  max_sites: number;
+  max_pages_per_scan: number;
+  scan_interval_hours: number;
+  description: string;
+}
+
+export interface BillingStatus {
+  billing_configured: boolean;
+  plan: string;
+  plan_name: string;
+  price_monthly_usd: number;
+  max_sites: number;
+  sites_used: number;
+  sites_remaining: number;
+  max_pages_per_scan: number;
+  scan_interval_hours: number;
+  can_add_site: boolean;
+  next_plan?: string;
+  subscription_status: string;
+  subscription_id?: string;
+  current_period_end?: string;
+  plans: Record<string, PlanInfo>;
 }
 
 export interface WebsiteReport extends ReportSiteSnapshot {
